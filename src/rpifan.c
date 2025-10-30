@@ -5,12 +5,14 @@
 #include <linux/device.h>
 #include <linux/uaccess.h>
 #include <linux/string.h>
+#include <linux/gpio.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrei Misiurov");
 MODULE_DESCRIPTION("Raspberry Pi Fan Control Driver");
 MODULE_VERSION("0.1.0");
 
+#define FAN_GPIO 18
 #define DEVICE_NAME "rpifan"
 #define CLASS_NAME "rpifan"
 
@@ -18,7 +20,7 @@ static int major_num;
 static struct class *rpifan_class = NULL;
 static struct device *rpifan_device = NULL;
 
-static bool fan_enabled = false;
+static unsigned int fan_enabled = 0;
 
 static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset);
 
@@ -40,10 +42,12 @@ static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t le
         command[len - 1] = '\0';
 
     if (0 == strcmp(command, "on")) {
-        fan_enabled = true;
+        fan_enabled = 1;
+        gpio_set_value(FAN_GPIO, fan_enabled);
         pr_info("%s: Fan turned ON\n", DEVICE_NAME);
     } else if (0 == strcmp(command, "off")) {
-        fan_enabled = false;
+        fan_enabled = 0;
+        gpio_set_value(FAN_GPIO, fan_enabled);
         pr_info("%s: Fan turned OFF\n", DEVICE_NAME);
     } else {
         pr_warn("%s: Unknown command: '%s'\n", DEVICE_NAME, command);
@@ -80,12 +84,33 @@ static int __init rpifan_init(void) {
         return PTR_ERR(rpifan_device);
     }
 
+    if (!gpio_is_valid(FAN_GPIO)) {
+        pr_err("%s: Invalid GPIO %d\n", DEVICE_NAME, FAN_GPIO);
+        device_destroy(rpifan_class, MKDEV(major_num, 0));
+        class_destroy(rpifan_class);
+        unregister_chrdev(major_num, DEVICE_NAME);
+        return -ENODEV;
+    }
+
+    if (gpio_request(FAN_GPIO, "rpifan_gpio")) {
+        pr_err("%s: Cannot request GPIO %d\n", DEVICE_NAME, FAN_GPIO);
+        device_destroy(rpifan_class, MKDEV(major_num, 0));
+        class_destroy(rpifan_class);
+        unregister_chrdev(major_num, DEVICE_NAME);
+        return -EBUSY;
+    }
+
+    gpio_direction_output(FAN_GPIO, 0);
+    pr_info("%s: GPIO %d configured\n", DEVICE_NAME, FAN_GPIO);
+
     pr_info("%s: Device created successfully (auto /dev/%s)\n", DEVICE_NAME, DEVICE_NAME);
 
     return 0;
 }
 
 static void __exit rpifan_exit(void) {
+    gpio_set_value(FAN_GPIO, 0);
+    gpio_free(FAN_GPIO);
     device_destroy(rpifan_class, MKDEV(major_num, 0));
     class_destroy(rpifan_class);
     unregister_chrdev(major_num, DEVICE_NAME);
