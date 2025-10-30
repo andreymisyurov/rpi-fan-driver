@@ -56,16 +56,33 @@ static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t le
     return len;
 }
 
+static int rpifan_gpio_init(void) {
+    int ret = 0;
+
+    if (!gpio_is_valid(FAN_GPIO)) {
+        pr_err("%s: Invalid GPIO %d\n", DEVICE_NAME, FAN_GPIO);
+        return -ENODEV;
+    }
+
+    ret = gpio_request(FAN_GPIO, "rpifan_gpio");
+    if (ret != 0) {
+        pr_err("%s: Cannot request GPIO %d\n", DEVICE_NAME, FAN_GPIO);
+        return ret;
+    }
+
+    gpio_direction_output(FAN_GPIO, 0);
+    pr_info("%s: GPIO %d configured\n", DEVICE_NAME, FAN_GPIO);
+    return 0;
+}
+
 static int __init rpifan_init(void) {
     major_num = register_chrdev(0, DEVICE_NAME, &fops);
+    int ret = 0;
 
     if (major_num < 0) {
         pr_err("%s: Failed to register device: %d\n", DEVICE_NAME, major_num);
         return major_num;
     }
-    
-    pr_info("%s: Registered with major number %d\n", DEVICE_NAME, major_num);
-
 
     rpifan_class = class_create(THIS_MODULE, CLASS_NAME);
     if (IS_ERR(rpifan_class)) {
@@ -73,39 +90,27 @@ static int __init rpifan_init(void) {
         pr_err("%s: Failed to create device class\n", DEVICE_NAME);
         return PTR_ERR(rpifan_class);
     }
-    
-    pr_info("%s: Device class created\n", DEVICE_NAME);
 
     rpifan_device = device_create(rpifan_class, NULL, MKDEV(major_num, 0), NULL, DEVICE_NAME);
     if (IS_ERR(rpifan_device)) {
-        class_destroy(rpifan_class);
-        unregister_chrdev(major_num, DEVICE_NAME);
         pr_err("%s: Failed to create device\n", DEVICE_NAME);
-        return PTR_ERR(rpifan_device);
+        ret = PTR_ERR(rpifan_device);
+        goto err_class;
     }
 
-    if (!gpio_is_valid(FAN_GPIO)) {
-        pr_err("%s: Invalid GPIO %d\n", DEVICE_NAME, FAN_GPIO);
-        device_destroy(rpifan_class, MKDEV(major_num, 0));
-        class_destroy(rpifan_class);
-        unregister_chrdev(major_num, DEVICE_NAME);
-        return -ENODEV;
-    }
-
-    if (gpio_request(FAN_GPIO, "rpifan_gpio")) {
-        pr_err("%s: Cannot request GPIO %d\n", DEVICE_NAME, FAN_GPIO);
-        device_destroy(rpifan_class, MKDEV(major_num, 0));
-        class_destroy(rpifan_class);
-        unregister_chrdev(major_num, DEVICE_NAME);
-        return -EBUSY;
-    }
-
-    gpio_direction_output(FAN_GPIO, 0);
-    pr_info("%s: GPIO %d configured\n", DEVICE_NAME, FAN_GPIO);
+    ret = rpifan_gpio_init();
+    if (ret != 0) goto err_device;
 
     pr_info("%s: Device created successfully (auto /dev/%s)\n", DEVICE_NAME, DEVICE_NAME);
-
     return 0;
+
+err_device:
+    device_destroy(rpifan_class, MKDEV(major_num, 0));
+err_class:
+    class_destroy(rpifan_class);
+err_chrdev:
+    unregister_chrdev(major_num, DEVICE_NAME);
+    return ret;
 }
 
 static void __exit rpifan_exit(void) {
