@@ -23,10 +23,12 @@ static struct device *rpifan_device = NULL;
 static unsigned int fan_enabled = 0;
 
 static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset);
+static ssize_t rpifan_read(struct file *file, char __user *buf, size_t len, loff_t *offset);
 
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .write = rpifan_write,
+    .read = rpifan_read,
 };
 
 static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset) {
@@ -56,6 +58,20 @@ static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t le
     return len;
 }
 
+static ssize_t rpifan_read(struct file *file, char __user *buf, size_t len, loff_t *offset) {
+    char status[5] = {0};
+    size_t status_len = 0;
+    if (*offset > 0) return 0;
+
+    status_len = snprintf(status, sizeof(status), "%s\n", fan_enabled ? "on" : "off");
+    if (len < status_len) return -ENOMEM;
+
+    if (copy_to_user(buf, status, status_len)) return -EFAULT;
+
+    *offset += status_len;
+    return status_len;
+}
+
 static int rpifan_gpio_init(void) {
     int ret = 0;
 
@@ -76,9 +92,9 @@ static int rpifan_gpio_init(void) {
 }
 
 static int __init rpifan_init(void) {
-    major_num = register_chrdev(0, DEVICE_NAME, &fops);
     int ret = 0;
 
+    major_num = register_chrdev(0, DEVICE_NAME, &fops);
     if (major_num < 0) {
         pr_err("%s: Failed to register device: %d\n", DEVICE_NAME, major_num);
         return major_num;
@@ -86,9 +102,9 @@ static int __init rpifan_init(void) {
 
     rpifan_class = class_create(THIS_MODULE, CLASS_NAME);
     if (IS_ERR(rpifan_class)) {
-        unregister_chrdev(major_num, DEVICE_NAME);
+        ret = PTR_ERR(rpifan_class);
         pr_err("%s: Failed to create device class\n", DEVICE_NAME);
-        return PTR_ERR(rpifan_class);
+        goto err_chrdev;
     }
 
     rpifan_device = device_create(rpifan_class, NULL, MKDEV(major_num, 0), NULL, DEVICE_NAME);
