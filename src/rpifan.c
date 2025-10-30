@@ -3,6 +3,8 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/device.h>
+#include <linux/uaccess.h>
+#include <linux/string.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrei Misiurov");
@@ -16,9 +18,39 @@ static int major_num;
 static struct class *rpifan_class = NULL;
 static struct device *rpifan_device = NULL;
 
+static bool fan_enabled = false;
+
+static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset);
+
 static struct file_operations fops = {
     .owner = THIS_MODULE,
+    .write = rpifan_write,
 };
+
+static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset) {
+    char command[5] = {0};
+
+    if (len > 4) len = 4;
+    if (len == 0) return -EINVAL;
+
+    if (copy_from_user(command, buf, len))
+        return -EFAULT;
+
+    if (command[len - 1] == '\n')
+        command[len - 1] = '\0';
+
+    if (0 == strcmp(command, "on")) {
+        fan_enabled = true;
+        pr_info("%s: Fan turned ON\n", DEVICE_NAME);
+    } else if (0 == strcmp(command, "off")) {
+        fan_enabled = false;
+        pr_info("%s: Fan turned OFF\n", DEVICE_NAME);
+    } else {
+        pr_warn("%s: Unknown command: '%s'\n", DEVICE_NAME, command);
+        return -EINVAL;
+    }
+    return len;
+}
 
 static int __init rpifan_init(void) {
     major_num = register_chrdev(0, DEVICE_NAME, &fops);
