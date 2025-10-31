@@ -6,6 +6,7 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/gpio.h>
+#include <linux/thermal.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrei Misiurov");
@@ -20,10 +21,12 @@ static int major_num;
 static struct class *rpifan_class = NULL;
 static struct device *rpifan_device = NULL;
 
+static struct thermal_zone_device *cpu_thermal_zone = NULL;
 static unsigned int fan_enabled = 0;
 
 static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t len, loff_t *offset);
 static ssize_t rpifan_read(struct file *file, char __user *buf, size_t len, loff_t *offset);
+static int get_cpu_temp(void);
 
 static struct file_operations fops = {
     .owner = THIS_MODULE,
@@ -59,17 +62,49 @@ static ssize_t rpifan_write(struct file *file, const char __user *buf, size_t le
 }
 
 static ssize_t rpifan_read(struct file *file, char __user *buf, size_t len, loff_t *offset) {
-    char status[5] = {0};
+    char status[256] = {0};
     size_t status_len = 0;
+    int temp = 0;
+
     if (*offset > 0) return 0;
+    if (len == 0) return 0;
 
-    status_len = snprintf(status, sizeof(status), "%s\n", fan_enabled ? "on" : "off");
-    if (len < status_len) return -ENOMEM;
-
-    if (copy_to_user(buf, status, status_len)) return -EFAULT;
+    
+    temp = get_cpu_temp();
+    if (temp >= 0) {
+        status_len = snprintf(status, sizeof(status), 
+        "Fan: %s\nTemperature: %d.%d °C\n", 
+        fan_enabled ? "on" : "off", 
+        temp/10, temp%10);
+    } else {
+        status_len = snprintf(status, sizeof(status), 
+        "Fan: %s\nTemperature: N/A (error: %d)\n", 
+        fan_enabled ? "on" : "off", 
+        temp);
+    }
+    
+    status_len = status_len < len ? status_len : len;
+    if (0 !=copy_to_user(buf, status, status_len)) return -EFAULT;
 
     *offset += status_len;
     return status_len;
+}
+
+static int get_cpu_temp(void) {
+    int temp = 0;
+    int ret = 0;
+    
+    if (IS_ERR(cpu_thermal_zone)) {
+        return PTR_ERR(cpu_thermal_zone);
+    }
+    
+    ret = thermal_zone_get_temp(cpu_thermal_zone, &temp);
+    if (ret) {
+        pr_err("%s: Failed to read temperature: %d\n", DEVICE_NAME, ret);
+        return ret;
+    }
+    
+    return temp / 100;
 }
 
 static int rpifan_gpio_init(void) {
@@ -116,6 +151,13 @@ static int __init rpifan_init(void) {
 
     ret = rpifan_gpio_init();
     if (ret != 0) goto err_device;
+
+    cpu_thermal_zone = thermal_zone_get_zone_by_name("cpu-thermal");
+    if (IS_ERR(cpu_thermal_zone)) {
+        pr_err("%s: Failed to get thermal zone\n", DEVICE_NAME);
+        ret = PTR_ERR(cpu_thermal_zone);
+        goto err_device;
+    }
 
     pr_info("%s: Device created successfully (auto /dev/%s)\n", DEVICE_NAME, DEVICE_NAME);
     return 0;
