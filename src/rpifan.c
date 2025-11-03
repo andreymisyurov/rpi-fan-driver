@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/atomic.h>
-#include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/gpio.h>
 #include <linux/init.h>
@@ -66,13 +65,16 @@ static ssize_t status_proc_read(struct file *file, char __user *buf, size_t len,
 		return 0;
 
 	if (get_cpu_temp(&temp) == 0) {
-		status_len = snprintf(status, sizeof(status),
-				      "Fan: %s\nTemperature: %d.%d °C\n",
-				      atomic_read(&fan_enabled) ? "on" : "off",
-				      temp / 10, temp % 10);
+		status_len =
+			snprintf(status, sizeof(status),
+				 "Auto: %s\nFan: %s\nTemperature: %d.%d °C\n",
+				 timer_pending(&fan_timer) ? "on" : "off",
+				 atomic_read(&fan_enabled) ? "on" : "off",
+				 temp / 10, temp % 10);
 	} else {
 		status_len = snprintf(status, sizeof(status),
-				      "Fan: %s\nTemperature: N/A\n",
+				      "Auto: %s\nFan: %s\nTemperature: N/A\n",
+				      timer_pending(&fan_timer) ? "on" : "off",
 				      atomic_read(&fan_enabled) ? "on" : "off");
 	}
 
@@ -101,9 +103,11 @@ static ssize_t status_proc_write(struct file *file, const char __user *buf,
 		command[len - 1] = '\0';
 
 	if (strcmp(command, "on") == 0) {
-		atomic_set(&fan_enabled, 1);
+		mod_timer(&fan_timer, jiffies + msecs_to_jiffies(3000));
 	} else if (strcmp(command, "off") == 0) {
+		del_timer(&fan_timer);
 		atomic_set(&fan_enabled, 0);
+		gpio_set_value(FAN_GPIO, 0);
 	} else {
 		pr_warn("%s: Unknown command: '%s'\n", DEVICE_NAME, command);
 		return -EINVAL;
@@ -262,7 +266,6 @@ static int __init rpifan_init(void)
 	}
 
 	timer_setup(&fan_timer, fan_timer_callback, 0);
-	mod_timer(&fan_timer, jiffies + msecs_to_jiffies(5000));
 
 	return ret;
 
