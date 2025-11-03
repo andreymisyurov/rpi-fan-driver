@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/atomic.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/gpio.h>
@@ -26,8 +27,9 @@ static struct proc_dir_entry *proc_threshold_temp;
 
 static struct thermal_zone_device *cpu_thermal_zone;
 static struct timer_list fan_timer;
-static unsigned int fan_enabled;
-static unsigned int threshold_temp;
+
+static atomic_t threshold_temp = ATOMIC_INIT(50);
+static atomic_t fan_enabled = ATOMIC_INIT(0);
 
 static ssize_t status_proc_read(struct file *file, char __user *buf, size_t len,
 				loff_t *offset);
@@ -66,12 +68,12 @@ static ssize_t status_proc_read(struct file *file, char __user *buf, size_t len,
 	if (get_cpu_temp(&temp) == 0) {
 		status_len = snprintf(status, sizeof(status),
 				      "Fan: %s\nTemperature: %d.%d °C\n",
-				      fan_enabled ? "on" : "off", temp / 10,
-				      temp % 10);
+				      atomic_read(&fan_enabled) ? "on" : "off",
+				      temp / 10, temp % 10);
 	} else {
 		status_len = snprintf(status, sizeof(status),
 				      "Fan: %s\nTemperature: N/A\n",
-				      fan_enabled ? "on" : "off");
+				      atomic_read(&fan_enabled) ? "on" : "off");
 	}
 
 	status_len = status_len < len ? status_len : len;
@@ -99,9 +101,9 @@ static ssize_t status_proc_write(struct file *file, const char __user *buf,
 		command[len - 1] = '\0';
 
 	if (strcmp(command, "on") == 0) {
-		fan_enabled = 1;
+		atomic_set(&fan_enabled, 1);
 	} else if (strcmp(command, "off") == 0) {
-		fan_enabled = 0;
+		atomic_set(&fan_enabled, 0);
 	} else {
 		pr_warn("%s: Unknown command: '%s'\n", DEVICE_NAME, command);
 		return -EINVAL;
@@ -136,7 +138,7 @@ static ssize_t threshold_temp_proc_write(struct file *file,
 			DEVICE_NAME, temp);
 		return -EINVAL;
 	}
-	threshold_temp = temp;
+	atomic_set(&threshold_temp, temp);
 	return len;
 }
 
@@ -152,7 +154,8 @@ static ssize_t threshold_temp_proc_read(struct file *file, char __user *buf,
 		return 0;
 
 	output_len = snprintf(output, sizeof(output),
-			      "Threshold Temperature: %d °C\n", threshold_temp);
+			      "Threshold Temperature: %d °C\n",
+			      atomic_read(&threshold_temp));
 
 	output_len = output_len < len ? output_len : len;
 	if (copy_to_user(buf, output, output_len) != 0)
@@ -180,15 +183,21 @@ static int get_cpu_temp(int *out_temp)
 static void fan_timer_callback(struct timer_list *t)
 {
 	int temp = 0;
+	int old_state = atomic_read(&fan_enabled);
+	int new_state = old_state;
+	int threshold = atomic_read(&threshold_temp);
 
 	if (get_cpu_temp(&temp) == 0) {
-		if (temp / 10 >= threshold_temp)
-			fan_enabled = 1;
-		else if (temp / 10 < (threshold_temp - 5))
-			fan_enabled = 0;
-	}
+		if (temp / 10 >= threshold)
+			new_state = 1;
+		else if (temp / 10 < (threshold - 5))
+			new_state = 0;
 
-	gpio_set_value(FAN_GPIO, fan_enabled);
+		if (new_state != old_state) {
+			atomic_set(&fan_enabled, new_state);
+			gpio_set_value(FAN_GPIO, new_state);
+		}
+	}
 	mod_timer(&fan_timer, jiffies + msecs_to_jiffies(5000));
 }
 
@@ -215,7 +224,6 @@ static int __init rpifan_init(void)
 {
 	int ret = 0;
 
-	threshold_temp = 50;
 	ret = rpifan_gpio_init();
 	if (ret != 0)
 		return ret;
@@ -235,7 +243,7 @@ static int __init rpifan_init(void)
 	}
 
 	proc_status =
-		proc_create("status", 0666, rpifan_proc_dir, &status_proc_ops);
+		proc_create("status", 0644, rpifan_proc_dir, &status_proc_ops);
 	if (!proc_status) {
 		pr_err("%s: Failed to create /proc/rpifan/status\n",
 		       DEVICE_NAME);
@@ -244,7 +252,7 @@ static int __init rpifan_init(void)
 	}
 
 	proc_threshold_temp =
-		proc_create("threshold_temp", 0666, rpifan_proc_dir,
+		proc_create("threshold_temp", 0644, rpifan_proc_dir,
 			    &threshold_temp_proc_ops);
 	if (!proc_threshold_temp) {
 		pr_err("%s: Failed to create /proc/rpifan/threshold_temp\n",
