@@ -153,7 +153,7 @@ static int get_cpu_temp(int *out_temp) {
 static void fan_timer_callback(struct timer_list *t) {
     int temp = 0;
     if (0 == get_cpu_temp(&temp)) {
-        if (temp / 10 > threshold_temp)
+        if (temp / 10 >= threshold_temp)
             fan_enabled = 1;
         else if (temp / 10 < (threshold_temp - 5))
             fan_enabled = 0;
