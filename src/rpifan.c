@@ -28,7 +28,7 @@ static struct thermal_zone_device *cpu_thermal_zone;
 static struct timer_list fan_timer;
 
 static atomic_t threshold_temp = ATOMIC_INIT(50);
-static atomic_t fan_enabled = ATOMIC_INIT(0);
+static atomic_t fan_enabled = ATOMIC_INIT(1);
 
 static ssize_t status_proc_read(struct file *file, char __user *buf, size_t len,
 				loff_t *offset);
@@ -72,10 +72,8 @@ static ssize_t status_proc_read(struct file *file, char __user *buf, size_t len,
 				 atomic_read(&fan_enabled) ? "on" : "off",
 				 temp / 10, temp % 10);
 	} else {
-		status_len = snprintf(status, sizeof(status),
-				      "Auto: %s\nFan: %s\nTemperature: N/A\n",
-				      timer_pending(&fan_timer) ? "on" : "off",
-				      atomic_read(&fan_enabled) ? "on" : "off");
+		pr_warn("%s: Failed to get CPU temperature\n", DEVICE_NAME);
+		return -EINVAL;
 	}
 
 	status_len = status_len < len ? status_len : len;
@@ -266,6 +264,9 @@ static int __init rpifan_init(void)
 	}
 
 	timer_setup(&fan_timer, fan_timer_callback, 0);
+
+	gpio_set_value(FAN_GPIO, atomic_read(&fan_enabled));
+	mod_timer(&fan_timer, jiffies + msecs_to_jiffies(3000));
 
 	return ret;
 
