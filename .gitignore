@@ -1,15 +1,17 @@
-# Build artifacts
+# Kernel module build artifacts
 *.o
 *.ko
 *.mod
 *.mod.c
+*.cmd
+.tmp_versions/
 Module.symvers
 modules.order
-.*.cmd
-.tmp_versions/
 
-# Editor files
-*~
-*.swp
+# Editor
 .vscode/
-.idea/
+*.swp
+*~
+
+# Compiled CLI
+cli/fan_ctl
