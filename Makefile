@@ -1,12 +1,15 @@
 BRANCH ?= master
 
 lint:
-	clang-format -i driver/rpifan.c
+	clang-format -i driver/rpifan.c --style=file:driver/.clang-format
+	clang-format -i cli/fan_ctl.c --style=file:cli/.clang-format
+
+check:
 	@./checkpatch.pl -f --no-tree --terse driver/rpifan.c || exit 1
 	@make -C driver clean && make -C driver || exit 1
 	@make -C driver clean
 
-push: lint
+push: check
 	@git push origin $(BRANCH)
 
-.PHONY: push
+.PHONY: push lint check
